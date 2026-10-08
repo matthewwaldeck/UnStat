@@ -1,0 +1,13 @@
+services:
+  unifi-stats:
+    build: .
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    volumes: ["./data:/data"]
+    environment:
+      UI_USER: ${UI_USER:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:-}  # set in a .env file to require a login for the web UI
+      SSH_USER: ${SSH_USER:-}  # shared SSH login for every device, also set in .env
+      SSH_PASSWORD: ${SSH_PASSWORD:-}
+      SSH_KEY_FILE: ${SSH_KEY_FILE:-}
+      SSH_PORT: ${SSH_PORT:-}

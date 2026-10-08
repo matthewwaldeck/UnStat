@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniFi stats</title>
+<style>
+:root{--ink:#17212b;--paper:#f3f5f7;--rule:#cbd3db;--blue:#0a5bd6;--amber:#c26a00;--red:#b3261e;--mute:#5b6875}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1280px;margin:0 auto;padding:1.5rem}
+header{display:flex;flex-wrap:wrap;gap:1rem 2rem;align-items:center;justify-content:space-between;padding-bottom:1rem}
+h1{font-size:1.5rem;margin:0;letter-spacing:-.01em}
+.ctl{display:flex;flex-wrap:wrap;gap:.75rem 1rem;align-items:center;color:var(--mute)}
+input,select,button{font:inherit;padding:.35rem .6rem;border:1px solid var(--rule);border-radius:4px;background:#fff;color:var(--ink)}
+input{width:5rem}
+button{background:var(--blue);border-color:var(--blue);color:#fff;cursor:pointer}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.dev{display:grid;grid-template-columns:15rem 1fr 1fr;gap:1.5rem;padding:1.5rem 0;border-top:1px solid var(--rule)}
+.dev h2{font-size:1.15rem;margin:0}
+.host{color:var(--mute);margin:0 0 .75rem}
+dl{display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;margin:0}
+dt{color:var(--mute)} dd{margin:0}
+.bad{color:var(--red);font-weight:600}
+.ch{position:relative;height:200px;min-width:0}
+.sec{background:#fff;color:var(--ink);border-color:var(--rule)}
+.acts{display:flex;gap:.5rem;margin:.75rem 0 0}
+.acts button{padding:.1rem .6rem;font-size:.9em}
+.acts button:disabled{opacity:.4;cursor:default}
+#devform{display:flex;flex-wrap:wrap;gap:.75rem 1rem;align-items:center;padding:1rem 0;border-top:1px solid var(--rule)}
+#devform[hidden]{display:none}
+#devform label{color:var(--mute)}
+#devform input{width:12rem}
+#formerr{color:var(--red)}
+@media(max-width:900px){.dev{grid-template-columns:1fr}}
+</style></head>
+<body><main>
+<header><h1>UniFi stats</h1>
+<div class="ctl">
+<label>Refresh every <input id="iv" type="number" min="5" max="3600"> seconds</label>
+<button id="save">Save</button>
+<label>Show last <select id="range"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option></select></label>
+<button id="add" class="sec">Add device</button><span id="stamp"></span></div></header>
+<form id="devform" hidden>
+<label>Name <input id="dn" required maxlength="60" placeholder="Office AP"></label>
+<label>IP or hostname <input id="dh" required placeholder="192.168.1.20"></label>
+<button id="go">Add device</button><button type="button" id="cancel" class="sec">Cancel</button><span id="formerr" role="alert"></span>
+</form>
+<p id="empty" hidden>No devices yet. Use Add device to start polling.</p>
+<div id="devs"></div></main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+const $ = s => document.querySelector(s), views = {};
+let timer, iv = 30, order = [];
+const esc = t => String(t ?? "–").replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+const bps = b => b == null ? "–" : b >= 1e6 ? (b / 1e6).toFixed(1) + " Mbps" : Math.round(b / 1e3) + " kbps";
+const pct = v => v + "%";
+const up = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d}d ${h}h` : `${h}h ${m}m`; };
+
+const mk = (el, sets, max, fmt) => new Chart(el, {type: "line",
+  data: {labels: [], datasets: sets.map(([label, c]) => ({label, borderColor: c, borderWidth: 1.5, pointRadius: 0, tension: .25, data: []}))},
+  options: {animation: false, maintainAspectRatio: false, interaction: {mode: "index", intersect: false},
+    scales: {x: {ticks: {maxTicksLimit: 5}}, y: {beginAtZero: true, max, ticks: {callback: fmt}}},
+    plugins: {legend: {labels: {boxWidth: 10}}, tooltip: {callbacks: {label: c => `${c.dataset.label}: ${fmt(c.parsed.y)}`}}}}});
+
+function build() {
+  const el = document.createElement("section"); el.className = "dev";
+  el.innerHTML = `<div><h2></h2><p class="host"></p><div class="facts"></div>
+    <p class="acts"><button class="sec up" title="Move up">↑</button><button class="sec down" title="Move down">↓</button><button class="sec edit">Edit</button><button class="sec del">Remove</button></p></div>
+    <div class="ch"><canvas></canvas></div><div class="ch"><canvas></canvas></div>`;
+  const [a, b] = el.querySelectorAll("canvas"), q = s => el.querySelector(s);
+  const v = {el, h: q("h2"), host: q(".host"), facts: q(".facts"), up: q(".up"), down: q(".down"),
+    use: mk(a, [["CPU", "#0a5bd6"], ["Memory", "#c26a00"]], 100, pct),
+    net: mk(b, [["Received", "#0a5bd6"], ["Sent", "#c26a00"]], undefined, bps)};
+  q(".edit").onclick = () => openForm(v.d);
+  q(".up").onclick = () => move(v, -1);
+  q(".down").onclick = () => move(v, 1);
+  q(".del").onclick = async () => {
+    if (!confirm(`Remove ${v.d.name} and its history?`)) return;
+    try { await api("DELETE", "/api/devices/" + encodeURIComponent(v.d.name)); load(); } catch (x) { alert(x.message); }
+  };
+  return v;
+}
+
+function upd(c, labels, ...sets) { c.data.labels = labels; sets.forEach((s, i) => c.data.datasets[i].data = s); c.update(); }
+
+function render(d, i, all) {
+  const v = views[d.name] ||= build();
+  v.d = d; v.h.textContent = d.name; v.host.textContent = d.host; $("#devs").append(v.el);
+  v.up.disabled = i === 0; v.down.disabled = i === all.length - 1;
+  v.up.setAttribute("aria-label", `Move ${d.name} up`); v.down.setAttribute("aria-label", `Move ${d.name} down`);
+  const ok = d.series.filter(x => !x.error), last = d.series.at(-1) || {};
+  const info = [...ok].reverse().find(x => x.model) || {};
+  v.facts.innerHTML = !d.series.length ? "<p>Waiting for first sample…</p>"
+    : last.error ? `<p class="bad">Unreachable: ${esc(last.error)}</p>`
+    : `<dl><dt>Model</dt><dd>${esc(info.model)}</dd><dt>Firmware</dt><dd>${esc(info.version)}</dd>
+       <dt>Uptime</dt><dd>${last.uptime ? up(last.uptime) : "–"}</dd><dt>Clients</dt><dd>${esc(last.clients)}</dd>
+       <dt>Load</dt><dd>${esc(last.load)}</dd></dl>`;
+  const t = ok.map(x => new Date(x.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}));
+  upd(v.use, t, ok.map(x => x.cpu), ok.map(x => x.mem));
+  upd(v.net, t, ok.map(x => x.rx), ok.map(x => x.tx));
+}
+
+async function load() {
+  try {
+    const r = await (await fetch(`/api/data?minutes=${$("#range").value}`)).json();
+    iv = r.interval;
+    if (document.activeElement !== $("#iv")) $("#iv").value = iv;
+    order = r.devices.map(d => d.name);
+    const names = new Set(order);
+    for (const n in views) if (!names.has(n)) { views[n].use.destroy(); views[n].net.destroy(); views[n].el.remove(); delete views[n]; }
+    $("#empty").hidden = r.devices.length > 0;
+    r.devices.forEach(render);
+    $("#stamp").textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e) { $("#stamp").textContent = "Can't reach the server. Retrying…"; }
+  clearTimeout(timer); timer = setTimeout(load, iv * 1000);
+}
+
+$("#save").onclick = async () => {
+  await fetch("/api/settings", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({interval: +$("#iv").value})});
+  load();
+};
+$("#range").onchange = load;
+
+async function move(v, by) {
+  const i = order.indexOf(v.d.name), j = i + by;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  try { await api("POST", "/api/order", {order}); load(); } catch (x) { alert(x.message); }
+}
+
+const form = $("#devform");
+let editing = null;
+async function api(method, url, body) {
+  const r = await fetch(url, {method, headers: {"Content-Type": "application/json"}, body: body && JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Request failed");
+  return j;
+}
+function openForm(d) {
+  editing = d ? d.name : null;
+  $("#dn").value = d ? d.name : ""; $("#dh").value = d ? d.host : "";
+  $("#formerr").textContent = ""; $("#go").textContent = d ? "Save changes" : "Add device";
+  form.hidden = false; $("#dn").focus();
+}
+form.onsubmit = async e => {
+  e.preventDefault();
+  const body = {name: $("#dn").value, host: $("#dh").value};
+  try {
+    await (editing ? api("PUT", "/api/devices/" + encodeURIComponent(editing), body) : api("POST", "/api/devices", body));
+    form.hidden = true; load(); setTimeout(load, 5000);
+  } catch (x) { $("#formerr").textContent = x.message; }
+};
+$("#add").onclick = () => openForm();
+$("#cancel").onclick = () => form.hidden = true;
+load();
+</script></body></html>
