@@ -2,17 +2,20 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UniFi stats</title>
+<script>try{var t=localStorage.getItem("theme");if(t&&t!=="auto")document.documentElement.dataset.theme=t}catch(e){}</script>
 <style>
-:root{--ink:#17212b;--paper:#f3f5f7;--rule:#cbd3db;--blue:#0a5bd6;--amber:#c26a00;--red:#b3261e;--mute:#5b6875}
+:root{color-scheme:light;--ink:#17212b;--paper:#f3f5f7;--rule:#cbd3db;--grid:rgba(0,0,0,.08);--field:#fff;--blue:#0a5bd6;--on-blue:#fff;--amber:#c26a00;--red:#b3261e;--mute:#5b6875}
+:root[data-theme="dark"]{color-scheme:dark;--ink:#e6ebf0;--paper:#12171d;--rule:#2d3742;--grid:rgba(255,255,255,.1);--field:#1b232c;--blue:#6ea8ff;--on-blue:#0b1a30;--amber:#f0a24b;--red:#ff8a80;--mute:#9aa7b4}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--ink:#e6ebf0;--paper:#12171d;--rule:#2d3742;--grid:rgba(255,255,255,.1);--field:#1b232c;--blue:#6ea8ff;--on-blue:#0b1a30;--amber:#f0a24b;--red:#ff8a80;--mute:#9aa7b4}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1280px;margin:0 auto;padding:1.5rem}
 header{display:flex;flex-wrap:wrap;gap:1rem 2rem;align-items:center;justify-content:space-between;padding-bottom:1rem}
 h1{font-size:1.5rem;margin:0;letter-spacing:-.01em}
 .ctl{display:flex;flex-wrap:wrap;gap:.75rem 1rem;align-items:center;color:var(--mute)}
-input,select,button{font:inherit;padding:.35rem .6rem;border:1px solid var(--rule);border-radius:4px;background:#fff;color:var(--ink)}
+input,select,button{font:inherit;padding:.35rem .6rem;border:1px solid var(--rule);border-radius:4px;background:var(--field);color:var(--ink)}
 input{width:5rem}
-button{background:var(--blue);border-color:var(--blue);color:#fff;cursor:pointer}
+button{background:var(--blue);border-color:var(--blue);color:var(--on-blue);cursor:pointer}
 :focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .dev{display:grid;grid-template-columns:15rem 1fr 1fr;gap:1.5rem;padding:1.5rem 0;border-top:1px solid var(--rule)}
 .dev h2{font-size:1.15rem;margin:0}
@@ -21,7 +24,7 @@ dl{display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;margin:0}
 dt{color:var(--mute)} dd{margin:0}
 .bad{color:var(--red);font-weight:600}
 .ch{position:relative;height:200px;min-width:0}
-.sec{background:#fff;color:var(--ink);border-color:var(--rule)}
+.sec{background:var(--field);color:var(--ink);border-color:var(--rule)}
 .acts{display:flex;gap:.5rem;margin:.75rem 0 0}
 .acts button{padding:.1rem .6rem;font-size:.9em}
 .acts button:disabled{opacity:.4;cursor:default}
@@ -30,6 +33,10 @@ dt{color:var(--mute)} dd{margin:0}
 #devform label{color:var(--mute)}
 #devform input{width:12rem}
 #formerr{color:var(--red)}
+#totals{display:flex;flex-wrap:wrap;gap:1rem 3rem;padding:1rem 0 1.25rem;border-top:1px solid var(--rule)}
+#totals[hidden]{display:none}
+.tot small{display:block;color:var(--mute)}
+.tot b{font-size:1.6rem;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
 @media(max-width:900px){.dev{grid-template-columns:1fr}}
 </style></head>
 <body><main>
@@ -38,7 +45,9 @@ dt{color:var(--mute)} dd{margin:0}
 <label>Refresh every <input id="iv" type="number" min="5" max="3600"> seconds</label>
 <button id="save">Save</button>
 <label>Show last <select id="range"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option></select></label>
+<label>Theme <select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
 <button id="add" class="sec">Add device</button><span id="stamp"></span></div></header>
+<div id="totals" hidden></div>
 <form id="devform" hidden>
 <label>Name <input id="dn" required maxlength="60" placeholder="Office AP"></label>
 <label>IP or hostname <input id="dh" required placeholder="192.168.1.20"></label>
@@ -52,6 +61,7 @@ const $ = s => document.querySelector(s), views = {};
 let timer, iv = 30, order = [];
 const esc = t => String(t ?? "–").replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
 const bps = b => b == null ? "–" : b >= 1e6 ? (b / 1e6).toFixed(1) + " Mbps" : Math.round(b / 1e3) + " kbps";
+const g = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const pct = v => v + "%";
 const up = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d}d ${h}h` : `${h}h ${m}m`; };
 
@@ -68,8 +78,8 @@ function build() {
     <div class="ch"><canvas></canvas></div><div class="ch"><canvas></canvas></div>`;
   const [a, b] = el.querySelectorAll("canvas"), q = s => el.querySelector(s);
   const v = {el, h: q("h2"), host: q(".host"), facts: q(".facts"), up: q(".up"), down: q(".down"),
-    use: mk(a, [["CPU", "#0a5bd6"], ["Memory", "#c26a00"]], 100, pct),
-    net: mk(b, [["Received", "#0a5bd6"], ["Sent", "#c26a00"]], undefined, bps)};
+    use: mk(a, [["CPU", g("--blue")], ["Memory", g("--amber")]], 100, pct),
+    net: mk(b, [["Received", g("--blue")], ["Sent", g("--amber")]], undefined, bps)};
   q(".edit").onclick = () => openForm(v.d);
   q(".up").onclick = () => move(v, -1);
   q(".down").onclick = () => move(v, 1);
@@ -106,9 +116,10 @@ async function load() {
     if (document.activeElement !== $("#iv")) $("#iv").value = iv;
     order = r.devices.map(d => d.name);
     const names = new Set(order);
-    for (const n in views) if (!names.has(n)) { views[n].use.destroy(); views[n].net.destroy(); views[n].el.remove(); delete views[n]; }
+    for (const n in views) if (!names.has(n)) drop(n);
     $("#empty").hidden = r.devices.length > 0;
     r.devices.forEach(render);
+    showTotals(r.devices);
     $("#stamp").textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) { $("#stamp").textContent = "Can't reach the server. Retrying…"; }
   clearTimeout(timer); timer = setTimeout(load, iv * 1000);
@@ -119,6 +130,30 @@ $("#save").onclick = async () => {
   load();
 };
 $("#range").onchange = load;
+
+function drop(n) {
+  const v = views[n];
+  v.use.destroy(); v.net.destroy(); v.el.remove(); delete views[n];
+}
+
+function showTotals(devs) {  // latest sample from every reachable device; a tile only shows if some device reports it
+  const t = {poe: null, clients: null, rx: null, tx: null};
+  for (const d of devs) {
+    const l = d.series.at(-1);
+    if (!l || l.error) continue;
+    for (const k in t) if (l[k] != null) t[k] = (t[k] ?? 0) + l[k];
+  }
+  const tiles = [["PoE draw", t.poe, v => v.toFixed(1) + " W"], ["Clients", t.clients, v => v],
+                 ["Throughput received", t.rx, bps], ["Throughput sent", t.tx, bps]].filter(x => x[1] != null);
+  $("#totals").hidden = !tiles.length;
+  $("#totals").innerHTML = tiles.map(([l, v, f]) => `<div class="tot"><small>${l}</small><b>${f(v)}</b></div>`).join("");
+}
+
+function setTheme(mode, rebuild) {
+  if (mode === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = mode;
+  Chart.defaults.color = g("--mute"); Chart.defaults.borderColor = g("--grid");
+  if (rebuild) { Object.keys(views).forEach(drop); load(); }  // charts pick up colors at creation, so rebuild them
+}
 
 async function move(v, by) {
   const i = order.indexOf(v.d.name), j = i + by;
@@ -151,5 +186,15 @@ form.onsubmit = async e => {
 };
 $("#add").onclick = () => openForm();
 $("#cancel").onclick = () => form.hidden = true;
+
+let saved = "auto";
+try { saved = localStorage.getItem("theme") || "auto"; } catch {}
+$("#theme").value = saved;
+setTheme(saved, false);
+$("#theme").onchange = e => {
+  try { localStorage.setItem("theme", e.target.value); } catch {}
+  setTheme(e.target.value, true);
+};
+matchMedia("(prefers-color-scheme: dark)").onchange = () => { if ($("#theme").value === "auto") setTheme("auto", true); };
 load();
 </script></body></html>
