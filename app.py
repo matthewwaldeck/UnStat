@@ -94,8 +94,12 @@ def parse(out, d):
     prev[d["name"]] = {"ts": now, "idle": idle, "total": total, "rx": rx, "tx": tx}
     try:
         m = json.loads(s.get("mca", ""))
-        r.update(model=m.get("model"), version=m.get("version"),
-                 clients=sum(v.get("num_sta", 0) for v in m.get("vap_table", [])))
+        r.update(model=m.get("model"), version=m.get("version"))
+        if "vap_table" in m:  # APs only
+            r["clients"] = sum(v.get("num_sta", 0) for v in m["vap_table"])
+        ports = [p for p in m.get("port_table", []) if "poe_power" in p]
+        if ports:  # only PoE-capable devices report this; otherwise the field is left out
+            r["poe"] = round(sum(float(p["poe_power"] or 0) for p in ports), 1)
     except ValueError:
         pass
     return r

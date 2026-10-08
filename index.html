@@ -92,8 +92,8 @@ function render(d, i, all) {
   v.facts.innerHTML = !d.series.length ? "<p>Waiting for first sample…</p>"
     : last.error ? `<p class="bad">Unreachable: ${esc(last.error)}</p>`
     : `<dl><dt>Model</dt><dd>${esc(info.model)}</dd><dt>Firmware</dt><dd>${esc(info.version)}</dd>
-       <dt>Uptime</dt><dd>${last.uptime ? up(last.uptime) : "–"}</dd><dt>Clients</dt><dd>${esc(last.clients)}</dd>
-       <dt>Load</dt><dd>${esc(last.load)}</dd></dl>`;
+       <dt>Uptime</dt><dd>${last.uptime ? up(last.uptime) : "–"}</dd>${last.clients != null ? `<dt>Clients</dt><dd>${last.clients}</dd>` : ""}
+       <dt>Load</dt><dd>${esc(last.load)}</dd>${last.poe != null ? `<dt>PoE draw</dt><dd>${last.poe} W</dd>` : ""}</dl>`;
   const t = ok.map(x => new Date(x.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}));
   upd(v.use, t, ok.map(x => x.cpu), ok.map(x => x.mem));
   upd(v.net, t, ok.map(x => x.rx), ok.map(x => x.tx));
