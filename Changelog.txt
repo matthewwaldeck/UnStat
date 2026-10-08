@@ -1,0 +1,8 @@
+v1.0.0 (2026-10-07)
+-Add and manage devices directly from WebUI.
+-SSH credentials configurable with environment variables.
+-Optional webUI credentials configurable with environment variables.
+-Re-order devices with simple buttons.
+-PoE draw for devices where supported.
+-Support for dark mode.
+-Global totals for PoE, client count, and throughput.
